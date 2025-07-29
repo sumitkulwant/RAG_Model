@@ -1,21 +1,26 @@
-# RAG_Model
 import os
 import requests
 import streamlit as st
 
-from langchain_community.document_loaders import UnstructuredFileIOLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 
-# Set up Streamlit UI
+import fitz  # PyMuPDF
+
+def extract_text_from_pdf(file_path):
+    doc = fitz.open(file_path)
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text
+
 st.title("📘 Ask Questions from a PDF using Groq + LangChain")
 
 groq_api_key = st.text_input("Enter your GROQ API key:", type="password")
 pdf_url = st.text_input("Enter a PDF URL to process:", value="https://alex.smola.org/drafts/thebook.pdf")
-
 query = st.text_input("Ask a question from the PDF:")
 
 if st.button("Submit") and groq_api_key and pdf_url and query:
@@ -24,32 +29,33 @@ if st.button("Submit") and groq_api_key and pdf_url and query:
 
         # Download PDF
         response = requests.get(pdf_url)
-        with open("book.pdf", "wb") as f:
+        pdf_path = "book.pdf"
+        with open(pdf_path, "wb") as f:
             f.write(response.content)
 
-        # Load document
-        with open("book.pdf", "rb") as f:
-            loader = UnstructuredFileIOLoader(file=f)
-            documents = loader.load()
+        # Extract text from PDF
+        raw_text = extract_text_from_pdf(pdf_path)
+        if not raw_text.strip():
+            st.error("Could not extract text from the PDF.")
+        else:
+            # Split text
+            text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            texts = text_splitter.create_documents([raw_text])
 
-        # Chunk text
-        text_splitter = CharacterTextSplitter(chunk_size=100, chunk_overlap=50)
-        texts = text_splitter.split_documents(documents)
+            # Embed and index
+            embedding = HuggingFaceBgeEmbeddings()
+            vectordb = Chroma.from_documents(texts, embedding)
 
-        # Embeddings and VectorDB
-        embedding = HuggingFaceBgeEmbeddings()
-        vectordb = Chroma.from_documents(texts, embedding)
+            # LLM
+            llm = ChatGroq(model="llama3-70b-8192", temperature=0)
 
-        # LLM setup
-        llm = ChatGroq(model="llama3-70b-8192", temperature=0)
+            # RetrievalQA
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                chain_type="stuff",
+                retriever=vectordb.as_retriever()
+            )
 
-        # QA Chain
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=vectordb.as_retriever()
-        )
-
-        # Run query
-        result = qa_chain.invoke({"query": query})
-        st.success(result["result"])
+            # Query the document
+            result = qa_chain.invoke({"query": query})
+            st.success(result["result"])
