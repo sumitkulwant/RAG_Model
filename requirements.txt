@@ -1,11 +1,10 @@
 streamlit
 requests
 PyMuPDF
+faiss-cpu
 langchain
 langchain-groq
 langchain-community
-langchain-chroma
 langchain-text-splitters
-chromadb
 transformers
 sentence-transformers
