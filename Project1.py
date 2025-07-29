@@ -19,7 +19,7 @@ def extract_text_from_pdf(file_path):
 
 # Streamlit UI
 st.set_page_config(page_title="PDF QA with Groq", layout="centered")
-st.title("📘 Ask Questions from a PDF using Groq + LangChain")
+st.title("📘 RAG MODEL Project")
 
 groq_api_key = st.text_input("🔑 Enter your GROQ API key:", type="password")
 pdf_url = st.text_input("🌐 Enter a PDF URL to process:", value="https://alex.smola.org/drafts/thebook.pdf")
@@ -45,25 +45,28 @@ if st.button("Submit"):
                     st.error("Could not extract text from the PDF.")
                     st.stop()
 
-                # Chunk text
-                text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+                # Chunk text (smaller to avoid token limits)
+                text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
                 texts = text_splitter.create_documents([raw_text])
 
-                # Create embeddings and vector DB (FAISS)
+                # Create embeddings and vector store (FAISS)
                 embedding = HuggingFaceBgeEmbeddings()
                 vectordb = FAISS.from_documents(texts, embedding)
 
-                # Set up LLM
+                # Restrict to top 5 chunks to stay under token limit
+                retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+
+                # Set up Groq LLM
                 llm = ChatGroq(model="llama3-70b-8192", temperature=0)
 
                 # Create RetrievalQA chain
                 qa_chain = RetrievalQA.from_chain_type(
                     llm=llm,
                     chain_type="stuff",
-                    retriever=vectordb.as_retriever()
+                    retriever=retriever
                 )
 
-                # Ask question
+                # Ask the question
                 result = qa_chain.invoke({"query": query})
                 st.success(result["result"])
 
