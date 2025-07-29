@@ -1,12 +1,11 @@
 streamlit
 requests
-chromadb
+PyMuPDF
 langchain
 langchain-groq
 langchain-community
 langchain-chroma
 langchain-text-splitters
+chromadb
 transformers
 sentence-transformers
-unstructured[pdf]
-poppler-utils
