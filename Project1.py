@@ -1,74 +1,56 @@
-import os
-import requests
 import streamlit as st
-import fitz  # PyMuPDF
-
+from langchain_community.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceBgeEmbeddings
-from langchain.vectorstores import FAISS
-from langchain_groq import ChatGroq
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_community.llms import Groq
 from langchain.chains import RetrievalQA
+import tempfile
+import os
 
-# Helper to extract text from PDF using PyMuPDF
-def extract_text_from_pdf(file_path):
-    doc = fitz.open(file_path)
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+st.set_page_config(page_title="PDF QA with RAG", layout="wide")
+st.title("📄 Ask Questions from your PDF (Groq + LLaMA3)")
 
-# Streamlit UI
-st.set_page_config(page_title="PDF QA with Groq", layout="centered")
-st.title("📘 RAG MODEL Project")
+# File uploader
+uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
 
-groq_api_key = st.text_input("🔑 Enter your GROQ API key:", type="password")
-pdf_url = st.text_input("🌐 Enter a PDF URL to process:", value="https://alex.smola.org/drafts/thebook.pdf")
-query = st.text_input("❓ Ask a question from the PDF:")
+# Groq API Key
+groq_api_key = st.text_input("Enter your Groq API Key", type="password")
 
-if st.button("Submit"):
-    if not groq_api_key or not pdf_url or not query:
-        st.warning("Please provide all required inputs.")
-    else:
-        try:
-            os.environ["GROQ_API_KEY"] = groq_api_key
-            with st.spinner("📥 Downloading and processing PDF..."):
+query = st.text_input("Ask a question from the document")
 
-                # Download PDF
-                response = requests.get(pdf_url)
-                pdf_path = "book.pdf"
-                with open(pdf_path, "wb") as f:
-                    f.write(response.content)
+if uploaded_file and groq_api_key and query:
+    with st.spinner("Processing..."):
+        # Save uploaded file to temp
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
 
-                # Extract text from PDF
-                raw_text = extract_text_from_pdf(pdf_path)
-                if not raw_text.strip():
-                    st.error("Could not extract text from the PDF.")
-                    st.stop()
+        # Load PDF content
+        loader = UnstructuredFileLoader(tmp_path)
+        documents = loader.load()
 
-                # Chunk text (smaller to avoid token limits)
-                text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-                texts = text_splitter.create_documents([raw_text])
+        # Split into small chunks to reduce token size
+        splitter = CharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+        docs = splitter.split_documents(documents)
 
-                # Create embeddings and vector store (FAISS)
-                embedding = HuggingFaceBgeEmbeddings()
-                vectordb = FAISS.from_documents(texts, embedding)
+        # Create embeddings
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vectordb = Chroma.from_documents(docs, embedding=embeddings)
 
-                # Restrict to top 5 chunks to stay under token limit
-                retriever = vectordb.as_retriever(search_kwargs={"k": 5})
+        # Use MMR retriever and fewer chunks to avoid hitting token limit
+        retriever = vectordb.as_retriever(search_type="mmr", search_kwargs={"k": 3})
 
-                # Set up Groq LLM
-                llm = ChatGroq(model="llama3-70b-8192", temperature=0)
+        # Set up Groq LLM
+        llm = Groq(model="llama3-70b-8192", api_key=groq_api_key)
 
-                # Create RetrievalQA chain
-                qa_chain = RetrievalQA.from_chain_type(
-                    llm=llm,
-                    chain_type="stuff",
-                    retriever=retriever
-                )
+        # Create QA chain
+        qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
 
-                # Ask the question
-                result = qa_chain.invoke({"query": query})
-                st.success(result["result"])
+        # Run QA
+        response = qa.run(query)
+        st.markdown("### 📌 Answer")
+        st.success(response)
 
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+        # Clean up
+        os.remove(tmp_path)
